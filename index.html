@@ -1,320 +1,35 @@
-import React, { useState, useEffect } from 'react';
-import { ChallengeRecord } from '../../types';
-import {
-  fetchAllRecords,
-  clearAllRecords,
-  subscribeToSync,
-} from '../../services/api';
-import { RecordCard } from './RecordCard';
-import { ProjectionModal } from './ProjectionModal';
-import { ClearConfirmModal } from './ClearConfirmModal';
-import {
-  RotateCcw,
-  Trash2,
-  Filter,
-  ArrowUpDown,
-  Users,
-  Radio,
-} from 'lucide-react';
+<!DOCTYPE html>
+<html lang="zh-HK">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>教師全班成果展示儀表板</title>
+  
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  
+  <!-- React & ReactDOM CDN -->
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+  
+  <!-- Babel Standalone for JSX in browser -->
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  
+  <!-- Firebase JS SDK (Compat Mode for Browser CDN) -->
+  <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-database-compat.js"></script>
+</head>
+<body class="bg-slate-50 text-slate-900 font-sans antialiased min-h-screen p-4 sm:p-6 lg:p-8">
 
-export const TeacherDashboard: React.FC = () => {
-  const [records, setRecords] = useState<ChallengeRecord[]>([]);
-  const [isLoading, setIsLoading] = useState(false);
-  const [autoRefresh, setAutoRefresh] = useState(true);
-  const [selectedScenarioFilter, setSelectedScenarioFilter] = useState<string>('ALL');
-  const [sortOption, setSortOption] = useState<'TIME_DESC' | 'TIME_ASC'>('TIME_DESC');
+  <div id="root"></div>
 
-  // Modals state
-  const [projectionRecord, setProjectionRecord] = useState<ChallengeRecord | null>(null);
-  const [isClearModalOpen, setIsClearModalOpen] = useState(false);
-  const [actionNotice, setActionNotice] = useState<string | null>(null);
+  <script type="text/babel">
+    const { useState, useEffect, useMemo } = React;
 
-  const loadData = async () => {
-    setIsLoading(true);
-    const data = await fetchAllRecords();
-    setRecords(data);
-    setIsLoading(false);
-  };
-
-  useEffect(() => {
-    loadData();
-
-    // Listen to real-time BroadcastChannel sync
-    const unsubscribe = subscribeToSync(() => {
-      loadData();
-    });
-
-    return () => {
-      unsubscribe();
-    };
-  }, []);
-
-  // Auto refresh interval (every 6 seconds for big screen projection)
-  useEffect(() => {
-    if (!autoRefresh) return;
-    const interval = setInterval(() => {
-      fetchAllRecords().then((data) => {
-        setRecords(data);
-      });
-    }, 6000);
-
-    return () => clearInterval(interval);
-  }, [autoRefresh]);
-
-  const handleClearRecords = async (password: string) => {
-    const result = await clearAllRecords(password);
-    if (result.success) {
-      setRecords([]);
-      setProjectionRecord(null);
-      setActionNotice('全班紀錄已成功清空！');
-      setTimeout(() => setActionNotice(null), 3000);
-      return { success: true };
-    }
-    return { success: false, error: result.error };
-  };
-
-  // Filter and Sort
-  const filteredRecords = records.filter((r) => {
-    if (selectedScenarioFilter === 'ALL') return true;
-    if (selectedScenarioFilter === 'A') return r.scenario_type.includes('情境 A');
-    if (selectedScenarioFilter === 'B') return r.scenario_type.includes('情境 B');
-    if (selectedScenarioFilter === 'C') return r.scenario_type.includes('情境 C');
-    return true;
-  });
-
-  const sortedRecords = [...filteredRecords].sort((a, b) => {
-    if (sortOption === 'TIME_DESC') {
-      return b.timestamp - a.timestamp;
-    }
-    if (sortOption === 'TIME_ASC') {
-      return a.timestamp - b.timestamp;
-    }
-    return 0;
-  });
-
-  // Calculate statistics
-  const totalSubmissions = records.length;
-  const countScenarioA = records.filter((r) => r.scenario_type.includes('情境 A')).length;
-  const countScenarioB = records.filter((r) => r.scenario_type.includes('情境 B')).length;
-  const countScenarioC = records.filter((r) => r.scenario_type.includes('情境 C')).length;
-  const sayNoPassed = records.filter((r) => r.evaluation?.say_no).length;
-  const safetyPassed = records.filter((r) => r.evaluation?.safety).length;
-
-  return (
-    <div className="max-w-7xl mx-auto space-y-6">
-      {/* Action Notification Toast */}
-      {actionNotice && (
-        <div className="fixed top-24 right-6 z-50 bg-slate-900 text-white px-5 py-3 rounded-2xl shadow-xl flex items-center gap-2 text-sm font-bold animate-bounce">
-          <span>{actionNotice}</span>
-        </div>
-      )}
-
-      {/* Top Header & Overview Bar */}
-      <div className="bg-white rounded-[24px] p-6 sm:p-8 shadow-xs border border-slate-200/80">
-        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-6 pb-6 border-b border-slate-100">
-          <div>
-            <div className="flex items-center gap-2 mb-1.5 flex-wrap">
-              <span className="px-3 py-1 rounded-full text-xs font-black bg-purple-100 text-[#9B59B6]">
-                全班學習成果大螢幕
-              </span>
-              <span className="text-xs text-slate-500">
-                香港小學五年級人文科《應對青春期的心理變化》· 實時動態同步 (Firebase Sync)
-              </span>
-            </div>
-            <h2 className="text-2xl sm:text-3xl font-black text-slate-900 tracking-tight">
-              教師全班成果展示儀表板
-            </h2>
-            <p className="text-sm text-slate-600 mt-1 max-w-2xl">
-              投影至電子白板引導全班反思：檢視各組學生在面對陌生網友時，能否堅定運用{' '}
-              <span className="font-bold text-[#3498DB]">Say NO</span> 及{' '}
-              <span className="font-bold text-[#9B59B6]">Safety</span> 守護個人私隱。
-            </p>
-          </div>
-
-          {/* Quick Classroom Stats */}
-          <div className="flex items-center gap-3 sm:gap-4 flex-wrap">
-            <div className="bg-sky-50 border border-sky-200/90 rounded-2xl px-4 py-3 text-center min-w-[96px]">
-              <div className="text-xs font-bold text-sky-800">已提交組數</div>
-              <div className="text-2xl font-black text-[#3498DB]">
-                {totalSubmissions}
-              </div>
-            </div>
-
-            <div className="bg-purple-50 border border-purple-200/90 rounded-2xl px-4 py-3 text-center min-w-[96px]">
-              <div className="text-xs font-bold text-purple-800">Say NO 實踐</div>
-              <div className="text-2xl font-black text-[#9B59B6]">
-                {sayNoPassed} 組
-              </div>
-            </div>
-
-            <div className="bg-amber-50 border border-amber-200/90 rounded-2xl px-4 py-3 text-center min-w-[96px]">
-              <div className="text-xs font-bold text-amber-800">Safety 守護</div>
-              <div className="text-2xl font-black text-amber-600">
-                {safetyPassed} 組
-              </div>
-            </div>
-          </div>
-        </div>
-
-        {/* Function Control Area */}
-        <div className="mt-6 flex flex-col md:flex-row items-stretch md:items-center justify-between gap-4 flex-wrap">
-          {/* Filters & Sorting */}
-          <div className="flex items-center gap-2.5 flex-wrap">
-            {/* Scenario Filter */}
-            <div className="flex items-center gap-1.5 bg-slate-100 p-1.5 rounded-2xl border border-slate-200">
-              <span className="text-xs font-bold text-slate-500 pl-2 hidden sm:inline">
-                <Filter className="w-3.5 h-3.5 inline mr-1" />
-                情境：
-              </span>
-              <button
-                type="button"
-                onClick={() => setSelectedScenarioFilter('ALL')}
-                className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all min-h-[38px] ${
-                  selectedScenarioFilter === 'ALL'
-                    ? 'bg-white text-slate-900 shadow-xs'
-                    : 'text-slate-600 hover:text-slate-900'
-                }`}
-              >
-                顯示全部 ({records.length})
-              </button>
-              <button
-                type="button"
-                onClick={() => setSelectedScenarioFilter('A')}
-                className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all min-h-[38px] ${
-                  selectedScenarioFilter === 'A'
-                    ? 'bg-sky-500 text-white shadow-xs'
-                    : 'text-slate-600 hover:text-slate-900'
-                }`}
-              >
-                情境 A（個人私隱）{countScenarioA > 0 ? `(${countScenarioA})` : ''}
-              </button>
-              <button
-                type="button"
-                onClick={() => setSelectedScenarioFilter('B')}
-                className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all min-h-[38px] ${
-                  selectedScenarioFilter === 'B'
-                    ? 'bg-purple-600 text-white shadow-xs'
-                    : 'text-slate-600 hover:text-slate-900'
-                }`}
-              >
-                情境 B（人身安全）{countScenarioB > 0 ? `(${countScenarioB})` : ''}
-              </button>
-              <button
-                type="button"
-                onClick={() => setSelectedScenarioFilter('C')}
-                className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all min-h-[38px] ${
-                  selectedScenarioFilter === 'C'
-                    ? 'bg-amber-500 text-slate-900 shadow-xs'
-                    : 'text-slate-600 hover:text-slate-900'
-                }`}
-              >
-                情境 C（家庭財物）{countScenarioC > 0 ? `(${countScenarioC})` : ''}
-              </button>
-            </div>
-
-            {/* Sorting Select (Likes removed) */}
-            <div className="flex items-center gap-1.5 bg-slate-100 p-1.5 rounded-2xl border border-slate-200">
-              <ArrowUpDown className="w-3.5 h-3.5 text-slate-500 ml-2" />
-              <select
-                value={sortOption}
-                onChange={(e) => setSortOption(e.target.value as any)}
-                className="bg-transparent text-xs font-bold text-slate-700 outline-none pr-3 py-1.5 cursor-pointer"
-              >
-                <option value="TIME_DESC">按時間排序（最新）</option>
-                <option value="TIME_ASC">按時間排序（最早）</option>
-              </select>
-            </div>
-          </div>
-
-          {/* Right Action Buttons */}
-          <div className="flex items-center gap-3 self-end md:self-auto">
-            {/* Auto Refresh Toggle & Manual Refresh Button */}
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={loadData}
-                disabled={isLoading}
-                className="flex items-center gap-2 px-4 py-2.5 rounded-2xl bg-white hover:bg-slate-50 border border-slate-200 text-slate-700 text-xs sm:text-sm font-bold shadow-2xs min-h-[44px] touch-manipulation active:scale-95 cursor-pointer"
-                title="立即手動更新成果"
-              >
-                <RotateCcw className={`w-4 h-4 ${isLoading ? 'animate-spin text-[#3498DB]' : ''}`} />
-                <span>實時刷新</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => setAutoRefresh(!autoRefresh)}
-                className={`flex items-center gap-1.5 px-3 py-2 rounded-2xl text-xs font-bold border transition-colors min-h-[44px] cursor-pointer ${
-                  autoRefresh
-                    ? 'bg-emerald-50 text-emerald-800 border-emerald-300'
-                    : 'bg-slate-50 text-slate-500 border-slate-200'
-                }`}
-                title="自動偵測各組 iPad 最新提交"
-              >
-                <Radio className={`w-3.5 h-3.5 ${autoRefresh ? 'animate-pulse text-emerald-600' : 'text-slate-400'}`} />
-                <span>{autoRefresh ? '自動同步中' : '已暫停自動同步'}</span>
-              </button>
-            </div>
-
-            {/* Trash Clear Button with Required Warning */}
-            <div className="flex items-center gap-2 pl-2 border-l border-slate-200">
-              <button
-                type="button"
-                onClick={() => setIsClearModalOpen(true)}
-                className="flex items-center gap-2 px-3.5 py-2.5 rounded-2xl bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 text-xs sm:text-sm font-bold shadow-2xs min-h-[44px] touch-manipulation active:scale-95 cursor-pointer"
-                title="需要教師授權密碼方可清洗紀錄"
-              >
-                <Trash2 className="w-4 h-4 text-rose-600" />
-                <span>清除紀錄</span>
-              </button>
-              {/* Mandatory warning label */}
-              <span className="text-xs font-bold text-rose-600 bg-rose-50/80 px-2.5 py-1.5 rounded-xl border border-rose-200/80 hidden sm:inline whitespace-nowrap">
-                🚫 學生不得按清除鍵
-              </span>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Grid Cards View */}
-      {sortedRecords.length === 0 ? (
-        <div className="bg-white rounded-[24px] p-12 text-center border border-slate-200 shadow-xs space-y-4">
-          <div className="w-16 h-16 rounded-2xl bg-slate-100 text-slate-400 flex items-center justify-center mx-auto">
-            <Users className="w-8 h-8" />
-          </div>
-          <div>
-            <h3 className="text-lg font-black text-slate-800">
-              暫無學生小組提交紀錄
-            </h3>
-            <p className="text-sm text-slate-500 max-w-md mx-auto mt-1">
-              學生於 iPad 互動區完成「AI 社交挑戰員」對練後，成果將即時同步於此處展示。
-            </p>
-          </div>
-        </div>
-      ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {sortedRecords.map((record) => (
-            <RecordCard
-              key={record.id}
-              record={record}
-              onOpenProjection={(rec) => setProjectionRecord(rec)}
-            />
-          ))}
-        </div>
-      )}
-
-      {/* Projection Modal */}
-      <ProjectionModal
-        record={projectionRecord}
-        onClose={() => setProjectionRecord(null)}
-      />
-
-      {/* Clear Records Confirm Modal */}
-      <ClearConfirmModal
-        isOpen={isClearModalOpen}
-        onClose={() => setIsClearModalOpen(false)}
-        onConfirm={handleClearRecords}
-      />
-    </div>
-  );
-};
+    // ==========================================
+    // 1. Firebase 設定（請替換為你的 Firebase 專案資訊）
+    // ==========================================
+    const firebaseConfig = {
+      apiKey: "YOUR_API_KEY",
+      authDomain: "YOUR_PROJECT_ID.firebaseapp.com",
+      databaseURL: "
