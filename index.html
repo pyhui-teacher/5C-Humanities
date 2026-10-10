@@ -1,324 +1,307 @@
-import React, { useState, useEffect } from 'react';
-import { ChallengeRecord } from '../../types';
-import {
-  fetchAllRecords,
-  clearAllRecords,
-  subscribeToSync,
-} from '../../services/api';
-import { RecordCard } from './RecordCard';
-import { ProjectionModal } from './ProjectionModal';
-import { ClearConfirmModal } from './ClearConfirmModal';
-import {
-  RotateCcw,
-  Trash2,
-  Filter,
-  ArrowUpDown,
-  Users,
-  Radio,
-} from 'lucide-react';
+import express from 'express';
+import path from 'path';
+import { fileURLToPath } from 'url';
+import fs from 'fs';
+import dotenv from 'dotenv';
+import { GoogleGenAI, Type } from '@google/genai';
 
-export const TeacherDashboard: React.FC = () => {
-  const [records, setRecords] = useState<ChallengeRecord[]>([]);
-  const [isLoading, setIsLoading] = useState(false);
-  const [autoRefresh, setAutoRefresh] = useState(true);
-  const [selectedScenarioFilter, setSelectedScenarioFilter] = useState<string>('ALL');
-  const [sortOption, setSortOption] = useState<'TIME_DESC' | 'TIME_ASC'>('TIME_DESC');
+dotenv.config();
 
-  // Modals state
-  const [projectionRecord, setProjectionRecord] = useState<ChallengeRecord | null>(null);
-  const [isClearModalOpen, setIsClearModalOpen] = useState(false);
-  const [actionNotice, setActionNotice] = useState<string | null>(null);
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
-  const loadData = async () => {
-    setIsLoading(true);
-    const data = await fetchAllRecords();
-    setRecords(data);
-    setIsLoading(false);
+const app = express();
+const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
+
+app.use(express.json());
+
+// Initialize Gemini SDK with telemetry header
+const ai = new GoogleGenAI({
+  apiKey: process.env.GEMINI_API_KEY,
+  httpOptions: {
+    headers: {
+      'User-Agent': 'aistudio-build',
+    },
+  },
+});
+
+export interface DialogueItem {
+  speaker: 'AI 挑戰員' | '學生';
+  text: string;
+}
+
+export interface ChallengeRecord {
+  id: string;
+  group_members: string[];
+  scenario_type: string;
+  scenario_title: string;
+  dialogue_history: DialogueItem[];
+  ai_feedback: string;
+  status: 'COMPLETED';
+  timestamp: number;
+  likes: number;
+  evaluation?: {
+    say_no: boolean;
+    safety: boolean;
+    seek_help: boolean;
   };
+}
 
-  useEffect(() => {
-    loadData();
+// In-memory records store (starts empty, no demo samples)
+let recordsStore: ChallengeRecord[] = [];
 
-    // Listen to real-time BroadcastChannel sync
-    const unsubscribe = subscribeToSync(() => {
-      loadData();
+// Fallback logic generator in case Gemini is offline or rate limited (Varied dynamic surrender)
+function generateFallbackResponse(
+  scenarioType: string,
+  studentInput: string
+) {
+  // Check for rejection words
+  const isSayNo =
+    /不|拒絕|別|走開|未成年|不行|不可以|不可以的|不能|不要|不會|絕不|不答應|沒空|不給|不發|不去|請你不要|不可|不方便|no|stop/i.test(
+      studentInput
+    );
+  const mentionsSafety =
+    /私隱|安全|危險|不認識|陌生人|網友|個人資料|保護|地址|照片|相片|公園|偏僻|秘密|犯法|壞人|不告訴/i.test(
+      studentInput
+    );
+  const mentionsSeekHelp =
+    /告訴家長|告訴老師|問媽媽|問爸爸|報警|長輩|父母|老師/i.test(studentInput);
+
+  // Varied NPC surrender replies tailored to scenario
+  let replies: string[] = [];
+  if (scenarioType.includes('情境 A')) {
+    replies = [
+      '好的，我尊重你的決定！沒想到你的網絡私隱意識這麼強，那我們還是專注在遊戲攻略上吧。',
+      '好吧，看來你很有保護個人容貌與近照的原則，那我就不再勉強你了。',
+      '明白了！保護個人私隱確實很關鍵，我們就繼續當純粹的網絡遊戲隊友吧。',
+    ];
+  } else if (scenarioType.includes('情境 B')) {
+    replies = [
+      '哎呀，看來你真的很小心謹慎！既然你堅持不單獨出來見面，那見面的事就算了吧，放學趕快平安回家喔。',
+      '既然你這麼警覺，我尊重你的想法，我們還是只在網上聊聊遊戲好了，注意安全！',
+      '好的，你說得對，學生確實不該隨便和網友在偏僻地方見面，我就不打擾你了。',
+    ];
+  } else {
+    replies = [
+      '原來你的自我防範意識這麼高！既然這樣，我就不寄禮物給你了，免得你和家人擔心。',
+      '好的，我明白了，住址和電話確實是重要家庭私隱，我不該隨便詢問，我們就在網上交流就好。',
+      '看來你很清楚保護家庭私隱的重要性，我不強求了，這份結交禮物我就收回吧！',
+    ];
+  }
+
+  const selectedReply = replies[Math.floor(Math.random() * replies.length)];
+
+  const feedback =
+    `表現值得肯定！你們在面對陌生邀約時能主動說「不」（Say NO），展現出自我保護意識。` +
+    `請牢記：保護個人私隱與安全是自己的責任！` +
+    `建議優化對白：「我們只是網上認識的朋友，為了安全起見，我堅決不會答應這個要求。」`;
+
+  return {
+    npc_reply: selectedReply,
+    is_completed: true,
+    ai_feedback: feedback,
+    evaluation: {
+      say_no: isSayNo,
+      safety: mentionsSafety,
+      seek_help: mentionsSeekHelp,
+    },
+  };
+}
+
+// API Routes
+app.post('/api/chat', async (req, res) => {
+  try {
+    const {
+      scenario_type,
+      dialogue_history = [],
+      student_input = '',
+      round = 1,
+      group_members = [],
+    } = req.body;
+
+    if (!student_input || !student_input.trim()) {
+      return res.status(400).json({ error: '請輸入學生的對白內容' });
+    }
+
+    const trimmedInput = student_input.trim();
+
+    // Check if API key is present
+    if (!process.env.GEMINI_API_KEY || process.env.GEMINI_API_KEY === 'MY_GEMINI_API_KEY') {
+      const fallback = generateFallbackResponse(scenario_type, trimmedInput);
+      return res.json(fallback);
+    }
+
+    const systemPrompt = `
+你是一位專為香港小學五年級人文科《應對青春期的心理變化》（網上交友與自我保護課題）設計的「AI 網上社交挑戰員」。
+你的任務是模擬一位在網上遊戲或社交平台結識的陌生網友，對小學生（五年級，約 10-11 歲）提出不當邀約。學生會進行一輪對練輸入。
+
+【重要設定：單輪對練，看到拒絕字眼直接放棄邀請，回覆必須生動多變，嚴禁機械式重複】
+本挑戰只需進行一輪對話即可完成。
+只要學生的輸入中包含任何拒絕字眼（例如：不行、不可以、不要、不能、拒絕、不方便、不發、不給、不去、不會、別、走開、不答應、沒空、不告訴、no 等）：
+👉 NPC 必須直接放棄邀請。
+【重要】：NPC 的回覆（npc_reply）必須依據學生所處情境與學生的具體答詞，給出生動、自然、合適且多樣化的回覆，【絕對不要千篇一律地重複「好吧，我明白了！既然你這麼堅持...」】。
+範例參考風格（請隨機與個性化變換，勿死板）：
+- 針對情境 A（索取照片/視像）：「好的，我尊重你的決定！沒想到你的網絡私隱意識這麼強，那我們還是專注在遊戲攻略上吧。」或「好吧，看來你很有保護個人容貌與近照的原則，那我就不再勉強你了。」
+- 針對情境 B（公園約見）：「哎呀，看來你真的很小心謹慎！既然你堅持不單獨出來見面，那見面的事就算了吧，放學趕快平安回家喔。」或「既然你這麼警覺，我尊重你的想法，我們還是只在網上聊聊遊戲好了，注意安全！」
+- 針對情境 C（索取住址電話）：「原來你的自我防範意識這麼高！既然這樣，我就不寄禮物給你了，免得你和家人擔心。」或「好的，我明白了，住址和電話確實是重要家庭私隱，我不該隨便詢問，我們就在網上交流就好。」
+is_completed 必須為 true，並立即生成約 50 字的個人化點評。
+
+【語言與表達規範】
+- 必須全程使用【繁體中文書面語】（嚴禁使用廣東話口語或方言字，如「咁」、「呢」、「啲」、「睇」等）。
+- 學生可能使用繁體中文、簡體中文或英文輸入，請以親切、合適的書面語進行回應。
+
+【當前情境】
+${scenario_type}
+
+【歷史對話】：
+${JSON.stringify(dialogue_history, null, 2)}
+【學生剛才的輸入】：
+"${trimmedInput}"
+
+【個人化總結點評與建議要求（約 50 字）】：
+1. 肯定學生的表現：針對學生具體輸入的字句，讚賞其自我保護意識，以及能否堅定運用 Say NO 堅決拒絕 和 Safety 遠離危險/保護私隱（Seek Help 視乎情況）。
+2. 1 句責任感與優化建議：必須提醒學生「保護個人私隱與安全是自己的責任」，並根據學生的答詞提供 1 個更得體又堅定的優化對白。
+3. 嚴格禁止輸出任何數字分數（例如百分比或分數）。
+4. 字數約 50 字（可微調至 45-75 字），語氣親切正面。
+`;
+
+    const response = await ai.models.generateContent({
+      model: 'gemini-3.8-flash',
+      contents: '請分析學生答詞並返回符合規格的 JSON。',
+      config: {
+        systemInstruction: systemPrompt,
+        responseMimeType: 'application/json',
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            npc_reply: {
+              type: Type.STRING,
+              description: 'NPC的回應台詞，純繁體中文書面語',
+            },
+            is_completed: {
+              type: Type.BOOLEAN,
+              description: '是否完成本次對練',
+            },
+            ai_feedback: {
+              type: Type.STRING,
+              description: '完成時生成的約50字個人化點評，未完成時為空字串',
+            },
+            evaluation: {
+              type: Type.OBJECT,
+              properties: {
+                say_no: { type: Type.BOOLEAN, description: '是否成功落實 Say NO' },
+                safety: { type: Type.BOOLEAN, description: '是否具備 Safety 自我保護概念' },
+                seek_help: { type: Type.BOOLEAN, description: '是否有主動尋求師長協助 Seek Help' },
+              },
+              required: ['say_no', 'safety', 'seek_help'],
+            },
+          },
+          required: ['npc_reply', 'is_completed', 'ai_feedback', 'evaluation'],
+        },
+      },
     });
 
-    return () => {
-      unsubscribe();
-    };
-  }, []);
+    const text = response.text?.trim() || '{}';
+    const parsed = JSON.parse(text);
+    return res.json(parsed);
+  } catch (error) {
+    console.error('Gemini API call failed, using rule-based fallback:', error);
+    const { scenario_type = '情境 A（個人私隱）', student_input = '' } = req.body;
+    const fallback = generateFallbackResponse(scenario_type, student_input);
+    return res.json(fallback);
+  }
+});
 
-  // Auto refresh interval (every 6 seconds for big screen projection)
-  useEffect(() => {
-    if (!autoRefresh) return;
-    const interval = setInterval(() => {
-      fetchAllRecords().then((data) => {
-        setRecords(data);
-      });
-    }, 6000);
+// Records listing for Teacher Dashboard and iPad Sync
+app.get('/api/records', (req, res) => {
+  res.json({ records: recordsStore });
+});
 
-    return () => clearInterval(interval);
-  }, [autoRefresh]);
+// Add new completed challenge record
+app.post('/api/records', (req, res) => {
+  const {
+    group_members,
+    scenario_type,
+    scenario_title,
+    dialogue_history,
+    ai_feedback,
+    evaluation,
+  } = req.body;
 
-  const handleClearRecords = async (password: string) => {
-    const result = await clearAllRecords(password);
-    if (result.success) {
-      setRecords([]);
-      setProjectionRecord(null);
-      setActionNotice('全班紀錄已成功清空！');
-      setTimeout(() => setActionNotice(null), 3000);
-      return { success: true };
-    }
-    return { success: false, error: result.error };
+  if (!group_members || !group_members.length || !dialogue_history) {
+    return res.status(400).json({ error: '缺少必要資料' });
+  }
+
+  const newRecord: ChallengeRecord = {
+    id: 'rec-' + Date.now() + '-' + Math.random().toString(36).substring(2, 6),
+    group_members,
+    scenario_type: scenario_type || '情境 A（個人私隱）',
+    scenario_title: scenario_title || '社交安全對練',
+    dialogue_history,
+    ai_feedback: ai_feedback || '',
+    status: 'COMPLETED',
+    timestamp: Date.now(),
+    likes: 0,
+    evaluation: evaluation || {
+      say_no: true,
+      safety: true,
+      seek_help: false,
+    },
   };
 
-  // Filter and Sort
-  const filteredRecords = records.filter((r) => {
-    if (selectedScenarioFilter === 'ALL') return true;
-    if (selectedScenarioFilter === 'A') return r.scenario_type.includes('情境 A');
-    if (selectedScenarioFilter === 'B') return r.scenario_type.includes('情境 B');
-    if (selectedScenarioFilter === 'C') return r.scenario_type.includes('情境 C');
-    return true;
+  // Add to top of store
+  recordsStore.unshift(newRecord);
+  res.status(201).json({ success: true, record: newRecord });
+});
+
+// Like a record (teacher or student praise, max 2 per client handled on client, increment here)
+app.post('/api/records/:id/like', (req, res) => {
+  const recordId = req.params.id;
+  const record = recordsStore.find((r) => r.id === recordId);
+  if (!record) {
+    return res.status(404).json({ error: '找不到該紀錄' });
+  }
+  record.likes = (record.likes || 0) + 1;
+  res.json({ success: true, likes: record.likes });
+});
+
+// Clear records (Password: 111 protected)
+app.delete('/api/records', (req, res) => {
+  const { password } = req.body;
+  if (password !== '111') {
+    return res.status(403).json({ error: '密碼錯誤！只有教師輸入正確管理密碼方可清洗紀錄。' });
+  }
+
+  recordsStore = [];
+  res.json({ success: true, message: '全班紀錄已成功重置！' });
+});
+
+// Serve standalone single-file HTML for GitHub Pages preview/download
+app.get('/standalone', (req, res) => {
+  res.sendFile(path.resolve(__dirname, 'dist-standalone', 'index.html'));
+});
+
+// Start server and mount Vite
+async function startServer() {
+  if (process.env.NODE_ENV === 'production') {
+    app.use(express.static(path.resolve(__dirname, 'dist')));
+    app.get('*', (req, res) => {
+      res.sendFile(path.resolve(__dirname, 'dist', 'index.html'));
+    });
+  } else {
+    const { createServer: createViteServer } = await import('vite');
+    const vite = await createViteServer({
+      server: { middlewareMode: true },
+      appType: 'spa',
+    });
+    app.use(vite.middlewares);
+  }
+
+  app.listen(PORT, '0.0.0.0', () => {
+    console.log(`AI 網上社交挑戰員系統正在運行：http://localhost:${PORT}`);
   });
+}
 
-  const sortedRecords = [...filteredRecords].sort((a, b) => {
-    if (sortOption === 'TIME_DESC') {
-      return b.timestamp - a.timestamp;
-    }
-    if (sortOption === 'TIME_ASC') {
-      return a.timestamp - b.timestamp;
-    }
-    return 0;
-  });
-
-  // Calculate statistics
-  const totalSubmissions = records.length;
-  const countScenarioA = records.filter((r) => r.scenario_type.includes('情境 A')).length;
-  const countScenarioB = records.filter((r) => r.scenario_type.includes('情境 B')).length;
-  const countScenarioC = records.filter((r) => r.scenario_type.includes('情境 C')).length;
-  const sayNoPassed = records.filter((r) => r.evaluation?.say_no).length;
-  const safetyPassed = records.filter((r) => r.evaluation?.safety).length;
-
-  return (
-    <div className="max-w-7xl mx-auto space-y-6">
-      {/* Action Notification Toast */}
-      {actionNotice && (
-        <div className="fixed top-24 right-6 z-50 bg-slate-900 text-white px-5 py-3 rounded-2xl shadow-xl flex items-center gap-2 text-sm font-bold animate-bounce">
-          <span>{actionNotice}</span>
-        </div>
-      )}
-
-      {/* Top Header & Overview Bar */}
-      <div className="bg-white rounded-[24px] p-6 sm:p-8 shadow-xs border border-slate-200/80">
-        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-6 pb-6 border-b border-slate-100">
-          <div>
-            <div className="flex items-center gap-2 mb-1.5 flex-wrap">
-              <span className="px-3 py-1 rounded-full text-xs font-black bg-purple-100 text-[#9B59B6]">
-                全班學習成果大螢幕
-              </span>
-              <span className="inline-flex items-center gap-1.5 px-3 py-0.5 rounded-full text-xs font-bold bg-amber-50 text-amber-800 border border-amber-200">
-                <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-                Firebase 實時同步中 (class5c-34b4d · 集合: lesson_5C)
-              </span>
-              <span className="text-xs text-slate-500">
-                香港小學五年級人文科《應對青春期的心理變化》
-              </span>
-            </div>
-            <h2 className="text-2xl sm:text-3xl font-black text-slate-900 tracking-tight">
-              教師全班成果展示儀表板
-            </h2>
-            <p className="text-sm text-slate-600 mt-1 max-w-2xl">
-              投影至電子白板引導全班反思：檢視各組學生在面對陌生網友時，能否堅定運用{' '}
-              <span className="font-bold text-[#3498DB]">Say NO</span> 及{' '}
-              <span className="font-bold text-[#9B59B6]">Safety</span> 守護個人私隱。
-            </p>
-          </div>
-
-          {/* Quick Classroom Stats */}
-          <div className="flex items-center gap-3 sm:gap-4 flex-wrap">
-            <div className="bg-sky-50 border border-sky-200/90 rounded-2xl px-4 py-3 text-center min-w-[96px]">
-              <div className="text-xs font-bold text-sky-800">已提交組數</div>
-              <div className="text-2xl font-black text-[#3498DB]">
-                {totalSubmissions}
-              </div>
-            </div>
-
-            <div className="bg-purple-50 border border-purple-200/90 rounded-2xl px-4 py-3 text-center min-w-[96px]">
-              <div className="text-xs font-bold text-purple-800">Say NO 實踐</div>
-              <div className="text-2xl font-black text-[#9B59B6]">
-                {sayNoPassed} 組
-              </div>
-            </div>
-
-            <div className="bg-amber-50 border border-amber-200/90 rounded-2xl px-4 py-3 text-center min-w-[96px]">
-              <div className="text-xs font-bold text-amber-800">Safety 守護</div>
-              <div className="text-2xl font-black text-amber-600">
-                {safetyPassed} 組
-              </div>
-            </div>
-          </div>
-        </div>
-
-        {/* Function Control Area */}
-        <div className="mt-6 flex flex-col md:flex-row items-stretch md:items-center justify-between gap-4 flex-wrap">
-          {/* Filters & Sorting */}
-          <div className="flex items-center gap-2.5 flex-wrap">
-            {/* Scenario Filter */}
-            <div className="flex items-center gap-1.5 bg-slate-100 p-1.5 rounded-2xl border border-slate-200">
-              <span className="text-xs font-bold text-slate-500 pl-2 hidden sm:inline">
-                <Filter className="w-3.5 h-3.5 inline mr-1" />
-                情境：
-              </span>
-              <button
-                type="button"
-                onClick={() => setSelectedScenarioFilter('ALL')}
-                className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all min-h-[38px] ${
-                  selectedScenarioFilter === 'ALL'
-                    ? 'bg-white text-slate-900 shadow-xs'
-                    : 'text-slate-600 hover:text-slate-900'
-                }`}
-              >
-                顯示全部 ({records.length})
-              </button>
-              <button
-                type="button"
-                onClick={() => setSelectedScenarioFilter('A')}
-                className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all min-h-[38px] ${
-                  selectedScenarioFilter === 'A'
-                    ? 'bg-sky-500 text-white shadow-xs'
-                    : 'text-slate-600 hover:text-slate-900'
-                }`}
-              >
-                情境 A（個人私隱）{countScenarioA > 0 ? `(${countScenarioA})` : ''}
-              </button>
-              <button
-                type="button"
-                onClick={() => setSelectedScenarioFilter('B')}
-                className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all min-h-[38px] ${
-                  selectedScenarioFilter === 'B'
-                    ? 'bg-purple-600 text-white shadow-xs'
-                    : 'text-slate-600 hover:text-slate-900'
-                }`}
-              >
-                情境 B（人身安全）{countScenarioB > 0 ? `(${countScenarioB})` : ''}
-              </button>
-              <button
-                type="button"
-                onClick={() => setSelectedScenarioFilter('C')}
-                className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all min-h-[38px] ${
-                  selectedScenarioFilter === 'C'
-                    ? 'bg-amber-500 text-slate-900 shadow-xs'
-                    : 'text-slate-600 hover:text-slate-900'
-                }`}
-              >
-                情境 C（家庭財物）{countScenarioC > 0 ? `(${countScenarioC})` : ''}
-              </button>
-            </div>
-
-            {/* Sorting Select (Likes removed) */}
-            <div className="flex items-center gap-1.5 bg-slate-100 p-1.5 rounded-2xl border border-slate-200">
-              <ArrowUpDown className="w-3.5 h-3.5 text-slate-500 ml-2" />
-              <select
-                value={sortOption}
-                onChange={(e) => setSortOption(e.target.value as any)}
-                className="bg-transparent text-xs font-bold text-slate-700 outline-none pr-3 py-1.5 cursor-pointer"
-              >
-                <option value="TIME_DESC">按時間排序（最新）</option>
-                <option value="TIME_ASC">按時間排序（最早）</option>
-              </select>
-            </div>
-          </div>
-
-          {/* Right Action Buttons */}
-          <div className="flex items-center gap-3 self-end md:self-auto">
-            {/* Auto Refresh Toggle & Manual Refresh Button */}
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={loadData}
-                disabled={isLoading}
-                className="flex items-center gap-2 px-4 py-2.5 rounded-2xl bg-white hover:bg-slate-50 border border-slate-200 text-slate-700 text-xs sm:text-sm font-bold shadow-2xs min-h-[44px] touch-manipulation active:scale-95 cursor-pointer"
-                title="立即手動更新成果"
-              >
-                <RotateCcw className={`w-4 h-4 ${isLoading ? 'animate-spin text-[#3498DB]' : ''}`} />
-                <span>實時刷新</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => setAutoRefresh(!autoRefresh)}
-                className={`flex items-center gap-1.5 px-3 py-2 rounded-2xl text-xs font-bold border transition-colors min-h-[44px] cursor-pointer ${
-                  autoRefresh
-                    ? 'bg-emerald-50 text-emerald-800 border-emerald-300'
-                    : 'bg-slate-50 text-slate-500 border-slate-200'
-                }`}
-                title="自動偵測各組 iPad 最新提交"
-              >
-                <Radio className={`w-3.5 h-3.5 ${autoRefresh ? 'animate-pulse text-emerald-600' : 'text-slate-400'}`} />
-                <span>{autoRefresh ? '自動同步中' : '已暫停自動同步'}</span>
-              </button>
-            </div>
-
-            {/* Trash Clear Button with Required Warning */}
-            <div className="flex items-center gap-2 pl-2 border-l border-slate-200">
-              <button
-                type="button"
-                onClick={() => setIsClearModalOpen(true)}
-                className="flex items-center gap-2 px-3.5 py-2.5 rounded-2xl bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 text-xs sm:text-sm font-bold shadow-2xs min-h-[44px] touch-manipulation active:scale-95 cursor-pointer"
-                title="需要教師授權密碼方可清洗紀錄"
-              >
-                <Trash2 className="w-4 h-4 text-rose-600" />
-                <span>清除紀錄</span>
-              </button>
-              {/* Mandatory warning label */}
-              <span className="text-xs font-bold text-rose-600 bg-rose-50/80 px-2.5 py-1.5 rounded-xl border border-rose-200/80 hidden sm:inline whitespace-nowrap">
-                🚫 學生不得按清除鍵
-              </span>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Grid Cards View */}
-      {sortedRecords.length === 0 ? (
-        <div className="bg-white rounded-[24px] p-12 text-center border border-slate-200 shadow-xs space-y-4">
-          <div className="w-16 h-16 rounded-2xl bg-slate-100 text-slate-400 flex items-center justify-center mx-auto">
-            <Users className="w-8 h-8" />
-          </div>
-          <div>
-            <h3 className="text-lg font-black text-slate-800">
-              暫無學生小組提交紀錄
-            </h3>
-            <p className="text-sm text-slate-500 max-w-md mx-auto mt-1">
-              學生於 iPad 互動區完成「AI 社交挑戰員」對練後，成果將即時同步於此處展示。
-            </p>
-          </div>
-        </div>
-      ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {sortedRecords.map((record) => (
-            <RecordCard
-              key={record.id}
-              record={record}
-              onOpenProjection={(rec) => setProjectionRecord(rec)}
-            />
-          ))}
-        </div>
-      )}
-
-      {/* Projection Modal */}
-      <ProjectionModal
-        record={projectionRecord}
-        onClose={() => setProjectionRecord(null)}
-      />
-
-      {/* Clear Records Confirm Modal */}
-      <ClearConfirmModal
-        isOpen={isClearModalOpen}
-        onClose={() => setIsClearModalOpen(false)}
-        onConfirm={handleClearRecords}
-      />
-    </div>
-  );
-};
+startServer().catch((err) => {
+  console.error('伺服器啟動失敗:', err);
+});
